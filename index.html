@@ -179,8 +179,8 @@
   }
   .gallery-btn { background:none; border:none; color:#888; cursor:pointer; }
   .gallery-btn:hover { color:white; }
+  .format-tag { font-size:0.6rem; padding:2px 4px; border-radius:3px; background:#333; color:#fff; font-weight:bold; }
 
-  /* Accessibility */
   .sr-only {
     position:absolute; width:1px; height:1px; padding:0; margin:-1px;
     overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
@@ -702,35 +702,37 @@
   }
 
   const btnRec = document.getElementById('btn-rec');
-  function addGalleryItem(url, type) {
-    const div = document.createElement('div');
-    div.className = 'gallery-item';
-    div.innerHTML = `
-      ${type==='vid' ? `<video src="${url}" class="gallery-thumb" muted loop onmouseover="this.play()" onmouseout="this.pause()"></video>` : `<img src="${url}" class="gallery-thumb">`}
-      <div class="gallery-overlay">
-        <span style="font-size:0.7rem; color:#aaa">${type.toUpperCase()}</span>
-        <div>
-          <button class="gallery-btn" onclick="const a=document.createElement('a'); a.href='${url}'; a.download='glitch_${Date.now()}.${type==='vid'?'webm':'png'}'; a.click();">⬇</button>
-          <button class="gallery-btn" onclick="this.closest('.gallery-item').remove()" style="margin-left:10px;">✕</button>
-        </div>
-      </div>`;
-    const list = document.getElementById('gallery-list');
-    if(list.children[0]?.style.textAlign) list.innerHTML = '';
-    list.prepend(div);
-  }
 
-  btnRec.addEventListener('click', toggleRecording);
-  btnRec.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') toggleRecording(); });
-
+  // Updated toggleRecording to check for MP4 support
   function toggleRecording() {
     if(!isRecording) {
       chunks = [];
       const st = canvas.captureStream(30);
-      recorder = new MediaRecorder(st, {mimeType:'video/webm'});
+
+      // Check for MP4 support
+      let mimeType = 'video/webm'; // fallback
+      const types = [
+        "video/mp4",
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4;codecs=h264",
+        "video/webm;codecs=vp9",
+        "video/webm"
+      ];
+
+      for (const t of types) {
+        if (MediaRecorder.isTypeSupported(t)) {
+          mimeType = t;
+          break;
+        }
+      }
+
+      recorder = new MediaRecorder(st, { mimeType });
       recorder.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
       recorder.onstop = () => {
-        const blob = new Blob(chunks, {type:'video/webm'});
-        addGalleryItem(URL.createObjectURL(blob), 'vid');
+        const blob = new Blob(chunks, {type: mimeType});
+        // Determine extension based on actual mimeType used
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        addGalleryItem(URL.createObjectURL(blob), 'vid', ext);
       };
       recorder.start();
       isRecording = true;
@@ -742,8 +744,32 @@
     }
   }
 
+  // Update addGalleryItem to accept extension
+  function addGalleryItem(url, type, ext = 'png') {
+    const div = document.createElement('div');
+    div.className = 'gallery-item';
+    div.innerHTML = `
+      ${type==='vid' ? `<video src="${url}" class="gallery-thumb" muted loop onmouseover="this.play()" onmouseout="this.pause()"></video>` : `<img src="${url}" class="gallery-thumb">`}
+      <div class="gallery-overlay">
+        <span style="font-size:0.7rem; color:#aaa; display:flex; align-items:center; gap:5px;">
+          ${type.toUpperCase()}
+          ${type==='vid' ? `<span class="format-tag">${ext.toUpperCase()}</span>` : ''}
+        </span>
+        <div>
+          <button class="gallery-btn" onclick="const a=document.createElement('a'); a.href='${url}'; a.download='glitch_${Date.now()}.${ext}'; a.click();">⬇</button>
+          <button class="gallery-btn" onclick="this.closest('.gallery-item').remove()" style="margin-left:10px;">✕</button>
+        </div>
+      </div>`;
+    const list = document.getElementById('gallery-list');
+    if(list.children[0]?.style.textAlign) list.innerHTML = '';
+    list.prepend(div);
+  }
+
+  btnRec.addEventListener('click', toggleRecording);
+  btnRec.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') toggleRecording(); });
+
   document.getElementById('btn-snap').addEventListener('click', () => {
-    addGalleryItem(canvas.toDataURL('image/png'), 'img');
+    addGalleryItem(canvas.toDataURL('image/png'), 'img', 'png');
     const f = document.createElement('div');
     f.style.cssText = 'position:fixed;inset:0;background:white;z-index:999;transition:0.2s';
     document.body.appendChild(f);
