@@ -120,10 +120,27 @@
   }
   .file-upload-btn:hover { border-color: var(--accent); color:white; }
 
+  /* UPDATED STAGE CSS */
   .stage {
-    flex:1; position:relative; background:#000; display:flex; align-items:center; justify-content:center; overflow:hidden;
+    flex: 1;
+    position: relative;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden; /* Important: prevents overflow on resize */
+    min-width: 0;    /* Important: allows flex item to shrink below content size */
+    min-height: 0;
   }
-  canvas { max-width:100%; max-height:100%; object-fit:contain; filter: drop-shadow(0 0 30px rgba(127,0,255,0.2)); }
+
+  /* UPDATED CANVAS CSS */
+  canvas {
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* Ensures aspect ratio is preserved */
+    filter: drop-shadow(0 0 30px rgba(127,0,255,0.2));
+  }
+  
   #video-source, #img-source { position:absolute; opacity:0; pointer-events:none; }
 
   .audio-badge {
@@ -408,10 +425,12 @@
       document.getElementById('cam-controls').style.display = 'block';
       document.getElementById('img-controls').style.display = 'none';
       if(video.srcObject) video.play();
+      if(video.readyState >= 2) resizeCanvas(video.videoWidth, video.videoHeight);
     } else {
       document.getElementById('cam-controls').style.display = 'none';
       document.getElementById('img-controls').style.display = 'block';
       video.pause();
+      if(imgSource.src) resizeCanvas(imgSource.naturalWidth, imgSource.naturalHeight);
     }
   };
 
@@ -433,7 +452,12 @@
 
   function loadImage(file) {
     const reader = new FileReader();
-    reader.onload = evt => { imgSource.src = evt.target.result; };
+    reader.onload = evt => { 
+      imgSource.src = evt.target.result; 
+      imgSource.onload = () => {
+        resizeCanvas(imgSource.naturalWidth, imgSource.naturalHeight);
+      }
+    };
     reader.readAsDataURL(file);
   }
 
@@ -524,10 +548,16 @@
     };
   }
 
+  // UPDATED RESIZE FUNCTION
   function resizeCanvas(w, h) {
+    // This sets the internal calculation resolution (quality)
+    // We do NOT set canvas.style.width here anymore. CSS handles the visual size.
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = w * dpr; canvas.height = h * dpr;
-    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    
+    // Set internal buffer size (for high quality glitches)
+    canvas.width = w * dpr; 
+    canvas.height = h * dpr;
+    
     ctx.setTransform(dpr,0,0,dpr,0,0);
 
     off.width = w * dpr; off.height = h * dpr;
@@ -539,8 +569,9 @@
     if (timestamp - lastFrame < 16) return; // ~60fps cap
     lastFrame = timestamp;
 
-    let w = canvas.width;
-    let h = canvas.height;
+    let w = canvas.width / (Math.min(2, window.devicePixelRatio || 1));
+    let h = canvas.height / (Math.min(2, window.devicePixelRatio || 1));
+    // Internal canvas dimensions might be scaled by DPR, so we use the logical size for drawing ops
 
     // Audio Data
     let bass = 0;
@@ -563,14 +594,17 @@
     ctx.globalCompositeOperation = 'source-over';
     ctx.filter = `hue-rotate(${config.hue}deg) saturate(${config.sat}%) contrast(${config.con}%) ${config.invert ? 'invert(1)' : ''}`;
 
+    // Normalize size for draw calls
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cw = canvas.width / dpr;
+    const ch = canvas.height / dpr;
+
     if(mode === 'img' && imgSource.src) {
-      ctx.fillStyle = '#000'; ctx.fillRect(0,0,w,h);
-      const scale = Math.min(w/imgSource.naturalWidth, h/imgSource.naturalHeight);
-      const iw = imgSource.naturalWidth * scale;
-      const ih = imgSource.naturalHeight * scale;
-      ctx.drawImage(imgSource, (w-iw)/2, (h-ih)/2, iw, ih);
+      ctx.fillStyle = '#000'; ctx.fillRect(0,0,cw,ch);
+      // We are now resizing canvas to match img, so just draw full
+      ctx.drawImage(imgSource, 0, 0, cw, ch);
     } else {
-      ctx.drawImage(video, 0, 0, w, h);
+      ctx.drawImage(video, 0, 0, cw, ch);
     }
     ctx.filter = 'none';
 
@@ -578,17 +612,17 @@
     const pixVal = v_pix > 0 ? Math.max(0.01, 1 - (v_pix/100)) : 0;
     if(pixVal > 0) {
       ctx.imageSmoothingEnabled = false;
-      const sw = w * pixVal; const sh = h * pixVal;
-      ctx.drawImage(canvas, 0, 0, w, h, 0, 0, sw, sh);
-      ctx.drawImage(canvas, 0, 0, sw, sh, 0, 0, w, h);
+      const sw = cw * pixVal; const sh = ch * pixVal;
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, sw, sh);
+      ctx.drawImage(canvas, 0, 0, sw * dpr, sh * dpr, 0, 0, cw, ch);
       ctx.imageSmoothingEnabled = true;
     }
 
     // Mirror
     if(config.mirror) {
       ctx.save();
-      ctx.translate(w, 0); ctx.scale(-1, 1);
-      ctx.drawImage(canvas, 0, 0, w/2, h, 0, 0, w/2, h);
+      ctx.translate(cw, 0); ctx.scale(-1, 1);
+      ctx.drawImage(canvas, 0, 0, cw/2 * dpr, ch * dpr, 0, 0, cw/2, ch);
       ctx.restore();
     }
 
@@ -597,22 +631,26 @@
       const mag = (v_jit/100) * 40;
       const jx = (Math.random()-0.5)*mag;
       const jy = (Math.random()-0.5)*mag;
-      ctx.drawImage(canvas, jx, jy);
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, jx, jy, cw, ch);
     }
 
     // RGB Shift
     if(v_rgb > 0) {
       const off = (v_rgb/100) * 40;
       ctx.globalCompositeOperation = 'screen';
-      ctx.save(); ctx.translate(-off, 0); ctx.globalAlpha = 0.6; ctx.filter = 'opacity(0.8) hue-rotate(0deg) saturate(500%)'; ctx.drawImage(canvas, 0, 0); ctx.restore();
-      ctx.save(); ctx.translate(off, 0); ctx.globalAlpha = 0.6; ctx.filter = 'opacity(0.8) hue-rotate(220deg) saturate(500%)'; ctx.drawImage(canvas, 0, 0); ctx.restore();
+      ctx.save(); ctx.translate(-off, 0); ctx.globalAlpha = 0.6; ctx.filter = 'opacity(0.8) hue-rotate(0deg) saturate(500%)'; 
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch); ctx.restore();
+      
+      ctx.save(); ctx.translate(off, 0); ctx.globalAlpha = 0.6; ctx.filter = 'opacity(0.8) hue-rotate(220deg) saturate(500%)'; 
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch); ctx.restore();
+      
       ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.filter = 'none';
     }
 
     // Scanlines
     if(v_scan > 0) {
       ctx.fillStyle = `rgba(0,0,0,${Math.min(0.8, v_scan/150)})`;
-      for(let y=0; y<h; y+=4) ctx.fillRect(0, y, w, 2);
+      for(let y=0; y<ch; y+=4) ctx.fillRect(0, y, cw, 2);
     }
 
     // Distortion slices
@@ -620,28 +658,31 @@
       if(Math.random() > 0.1) {
         const slices = Math.floor(v_dist/5) + 1;
         for(let i=0; i<slices; i++) {
-          const sh = Math.random() * h/3;
-          const sy = Math.random() * h;
+          const sh = Math.random() * ch/3;
+          const sy = Math.random() * ch;
           const sx = (Math.random()-0.5) * (v_dist*3);
-          ctx.drawImage(canvas, 0, sy, w, sh, sx, sy, w, sh);
+          ctx.drawImage(canvas, 0, sy * dpr, cw * dpr, sh * dpr, sx, sy, cw, sh);
         }
       }
     }
 
     // Tear effect
     if(config.tear > 0 && Math.random() < config.tear/100) {
-      const y = Math.random() * h;
+      const y = Math.random() * ch;
       const slice = 10 + Math.random() * 40;
       const shift = (Math.random()-0.5) * 80;
-      ctx.drawImage(canvas, 0, y, w, slice, shift, y, w, slice);
+      ctx.drawImage(canvas, 0, y * dpr, cw * dpr, slice * dpr, shift, y, cw, slice);
     }
 
     // Aberration
     if(config.aber > 0) {
       const shift = (config.aber/100) * 8;
       ctx.globalCompositeOperation = 'screen';
-      ctx.save(); ctx.translate(-shift, 0); ctx.globalAlpha = 0.4; ctx.filter = 'hue-rotate(20deg) saturate(300%)'; ctx.drawImage(canvas, 0, 0); ctx.restore();
-      ctx.save(); ctx.translate(shift, 0); ctx.globalAlpha = 0.4; ctx.filter = 'hue-rotate(240deg) saturate(300%)'; ctx.drawImage(canvas, 0, 0); ctx.restore();
+      ctx.save(); ctx.translate(-shift, 0); ctx.globalAlpha = 0.4; ctx.filter = 'hue-rotate(20deg) saturate(300%)'; 
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch); ctx.restore();
+
+      ctx.save(); ctx.translate(shift, 0); ctx.globalAlpha = 0.4; ctx.filter = 'hue-rotate(240deg) saturate(300%)'; 
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch); ctx.restore();
       ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.filter = 'none';
     }
 
@@ -652,25 +693,25 @@
       ctx.globalCompositeOperation = 'screen';
       ctx.filter = `blur(${blur}px) brightness(1.2)`;
       ctx.globalAlpha = 0.35 + (config.glow/200);
-      ctx.drawImage(canvas, 0, 0);
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch);
       ctx.filter = `blur(${glow}px)`;
       ctx.globalAlpha = 0.25 + (config.glow/180);
-      ctx.drawImage(canvas, 0, 0);
+      ctx.drawImage(canvas, 0, 0, cw * dpr, ch * dpr, 0, 0, cw, ch);
       ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.filter = 'none';
     }
 
     // Vignette
     if(config.vig > 0) {
-      const grd = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)/3, w/2, h/2, Math.max(w,h)/1.2);
+      const grd = ctx.createRadialGradient(cw/2, ch/2, Math.min(cw,ch)/3, cw/2, ch/2, Math.max(cw,ch)/1.2);
       grd.addColorStop(0, 'rgba(0,0,0,0)');
       grd.addColorStop(1, `rgba(0,0,0,${config.vig/100})`);
       ctx.fillStyle = grd;
-      ctx.fillRect(0, 0, w, h);
+      ctx.fillRect(0, 0, cw, ch);
     }
 
     // Film Grain
     if(config.grain > 0) {
-      const imgData = ctx.getImageData(0,0,w,h);
+      const imgData = ctx.getImageData(0,0,cw*dpr,ch*dpr); // Full res for grain
       const d = imgData.data;
       const intensity = config.grain / 100 * 30;
       for(let i=0; i<d.length; i+=4) {
@@ -683,21 +724,21 @@
     // Curvature (CRT illusion)
     if(config.curve > 0) {
       const curve = config.curve / 100;
-      offCtx.clearRect(0,0,w,h);
+      offCtx.clearRect(0,0,cw*dpr,ch*dpr);
       offCtx.drawImage(canvas,0,0);
-      ctx.clearRect(0,0,w,h);
+      ctx.clearRect(0,0,cw*dpr,ch*dpr);
 
       const inset = curve * 30;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(inset, inset, w - inset*2, h - inset*2);
+      ctx.rect(inset, inset, cw - inset*2, ch - inset*2);
       ctx.clip();
-      ctx.drawImage(off, 0, 0);
+      ctx.drawImage(off, 0, 0, cw*dpr, ch*dpr, 0, 0, cw, ch);
       ctx.restore();
 
       ctx.strokeStyle = `rgba(0,0,0,${curve})`;
       ctx.lineWidth = inset;
-      ctx.strokeRect(0,0,w,h);
+      ctx.strokeRect(0,0,cw,ch);
     }
   }
 
